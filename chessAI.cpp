@@ -1,6 +1,7 @@
+// chessAI.cpp
 //Starfish --- chess engine developed by dsyoier
-//Version 2.5 (Bookworm)
-//FEN Book Edition - Final Corrected Version
+//Version 2.8.1 (Strategist Pro) - PGN/FEN/SAN Aware, Legacy Compiler Compatible
+//FEN Book Edition - Final Corrected Version with Min-Depth/Max-Time Search Logic
 #include <iostream>
 #include <vector>
 #include <string>
@@ -8,11 +9,12 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
-#include <cctype>   // for ::tolower
-#include <limits>   // for numeric_limits
-#include <fstream>  // for file I/O
-#include <sstream>  // for string streams
-#include <cstdint>  // for uint64_t
+#include <cctype>
+#include <limits>
+#include <fstream>
+#include <sstream>
+#include <cstdint>
+#include <regex>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -23,7 +25,7 @@
 
 using namespace std;
 
-// --- ∫À–ƒ∂®“Â”Î ˝æ›Ω·ππ (Œﬁ±‰ªØ) ---
+// --- Ê†∏ÂøÉÂÆö‰πâ‰∏éÊï∞ÊçÆÁªìÊûÑ ---
 const int WHITE = 0;
 const int BLACK = 1;
 const int NONE = 2;
@@ -47,7 +49,7 @@ struct Move {
     }
 };
 
-// --- »´æ÷”Œœ∑◊¥Ã¨ ---
+// --- ÂÖ®Â±ÄÊ∏∏ÊàèÁä∂ÊÄÅ ---
 int board[10][10];
 int currentPlayer;
 Pos enPassantTarget;
@@ -63,22 +65,30 @@ struct UndoInfo {
     int halfmoveClock;
 };
 
-// --- ∆Â◊”æ≤Ã¨ ˝æ› (Œﬁ±‰ªØ) ---
+// --- Â±ÄÈù¢ÂéÜÂè≤ËÆ∞ÂΩïÔºåÁî®‰∫é‰∏âÊ¨°ÈáçÂ§çÊ£ÄÊµã ---
+map<string, int> positionHistory;
+
+
+// --- Ê£ãÂ≠êÈùôÊÄÅÊï∞ÊçÆ ---
 int pieceValue[] = {0, 100, 375, 397, 613, 1220, 20000};
 map<int, char> pieceChar = {
     {W_PAWN, 'P'}, {W_KNIGHT, 'N'}, {W_BISHOP, 'B'}, {W_ROOK, 'R'}, {W_QUEEN, 'Q'}, {W_KING, 'K'},
     {B_PAWN, 'p'}, {B_KNIGHT, 'n'}, {B_BISHOP, 'b'}, {B_ROOK, 'r'}, {B_QUEEN, 'q'}, {B_KING, 'k'},
     {EMPTY_PIECE, '.'}
 };
+map<char, int> charToPiece = {
+    {'P', W_PAWN}, {'N', W_KNIGHT}, {'B', W_BISHOP}, {'R', W_ROOK}, {'Q', W_QUEEN}, {'K', W_KING},
+    {'p', B_PAWN}, {'n', B_KNIGHT}, {'b', B_BISHOP}, {'r', B_ROOK}, {'q', B_QUEEN}, {'k', B_KING}
+};
 Pos knight_deltas[] = {{1,2}, {1,-2}, {-1,2}, {-1,-2}, {2,1}, {2,-1}, {-2,1}, {-2,-1}};
 Pos bishop_deltas[] = {{1,1}, {1,-1}, {-1,1}, {-1,-1}};
 Pos rook_deltas[]   = {{1,0}, {-1,0}, {0,1}, {0,-1}};
 Pos king_deltas[]   = {{1,0}, {-1,0}, {0,1}, {0,-1}, {1,1}, {1,-1}, {-1,1}, {-1,-1}};
 
-// --- ∆Â◊”Œª÷√±Ì (Piece-Square Tables) (Œﬁ±‰ªØ) ---
+// --- Ê£ãÂ≠ê‰ΩçÁΩÆË°® (Piece-Square Tables) ---
 const int pawn_pst_mg[64] = {0,0,0,0,0,0,0,0,50,50,50,50,50,50,50,50,10,10,20,30,30,20,10,10,5,5,10,25,25,10,5,5,0,0,0,20,20,0,0,0,5,-5,-10,0,0,-10,-5,5,5,10,10,-20,-20,10,10,5,0,0,0,0,0,0,0,0};
 const int pawn_pst_eg[64] = {0,0,0,0,0,0,0,0,80,80,80,80,80,80,80,80,50,50,50,50,50,50,50,50,30,30,30,30,30,30,30,30,20,20,20,20,20,20,20,20,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,0,0,0,0,0,0,0,0};
-const int knight_pst_mg[64] = {-50,-40,-30,-30,-30,-30,-40,-50,-40,-20,0,0,0,0,-20,-40,-30,0,10,15,15,10,0,-30,-30,5,15,20,20,15,5,-30,-30,0,15,20,20,15,0,-30,-30,5,10,15,15,10,5,-30,-40,-20,0,5,5,0,-20,-40,-50,-40,-30,-30,-30,-30,-40,-50};
+const int knight_pst_mg[64] = {-250,-40,-30,-30,-30,-30,-40,-250,-40,-20,0,0,0,0,-20,-40,-30,0,10,15,15,10,0,-30,-30,5,15,20,20,15,5,-30,-30,0,15,20,20,15,0,-30,-30,5,10,15,15,10,5,-30,-40,-20,0,5,5,0,-20,-40,-250,-40,-30,-30,-30,-30,-40,-250};
 const int knight_pst_eg[64] = {-50,-30,-20,-20,-20,-20,-30,-50,-30,-10,0,5,5,0,-10,-30,-20,0,5,10,10,5,0,-20,-20,5,10,15,15,10,5,-20,-20,5,10,15,15,10,5,-20,-20,0,5,10,10,5,0,-20,-30,-10,0,5,5,0,-10,-30,-50,-30,-20,-20,-20,-20,-30,-50};
 const int bishop_pst_mg[64] = {-20,-10,-10,-10,-10,-10,-10,-20,-10,0,0,0,0,0,0,-10,-10,0,5,10,10,5,0,-10,-10,5,5,10,10,5,5,-10,-10,0,10,10,10,10,0,-10,-10,10,10,10,10,10,10,-10,-10,5,0,0,0,0,5,-10,-20,-10,-10,-10,-10,-10,-10,-20};
 const int bishop_pst_eg[64] = {-20,-10,-10,-10,-10,-10,-10,-20,-10,0,5,0,0,5,0,-10,-10,5,5,5,5,5,5,-10,-10,0,5,5,5,5,0,-10,-10,5,5,5,5,5,5,-10,-10,0,5,0,0,5,0,-10,-10,0,0,0,0,0,0,-10,-20,-10,-10,-10,-10,-10,-10,-20};
@@ -88,34 +98,42 @@ const int queen_pst_mg[64] = {-20,-10,-10,-5,-5,-10,-10,-20,-10,0,0,0,0,0,0,-10,
 const int queen_pst_eg[64] = {-20,-10,-10,-5,-5,-10,-10,-20,-10,0,0,0,0,0,0,-10,-10,0,5,5,5,5,0,-10,-5,0,5,5,5,5,0,-5,0,0,5,5,5,5,0,-5,-10,5,5,5,5,5,0,-10,-10,0,5,0,0,0,0,-10,-20,-10,-10,-5,-5,-10,-10,-20};
 const int king_pst_mg[64] = {-30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30,-20,-30,-30,-40,-40,-30,-30,-20,-10,-20,-20,-20,-20,-20,-20,-10,20,20,0,0,0,0,20,20,20,30,10,0,0,10,30,20};
 const int king_pst_eg[64] = {-50,-40,-30,-20,-20,-30,-40,-50,-30,-20,-10,0,0,-10,-20,-30,-30,-10,20,30,30,20,-10,-30,-30,-10,30,40,40,30,-10,-30,-30,-10,30,40,40,30,-10,-30,-30,-10,20,30,30,20,-10,-30,-30,-30,0,0,0,0,-30,-30,-50,-30,-30,-30,-30,-30,-30,-50};
-inline int PieceColorOf(int piece);
 
-
-// --- FEN ø™æ÷ø‚ (Œﬁ±‰ªØ) ---
+// --- FEN ÂºÄÂ±ÄÂ∫ì ---
 map<string, string> openingBook;
-string GenerateFEN() {
-    stringstream fen;
+inline int PieceColorOf(int piece); // ÂâçÂêëÂ£∞Êòé
+void ResetPositionHistory(); // ÂâçÂêëÂ£∞Êòé
+
+// --- ÁîüÊàêÁî®‰∫é‰∏âÂêåÊ£ÄÊµãÁöÑÂ±ÄÈù¢ÂîØ‰∏ÄÈîÆ ---
+string GeneratePositionKey() {
+    stringstream key;
     for (int y = 8; y >= 1; --y) {
         int empty_count = 0;
         for (int x = 1; x <= 8; ++x) {
             int piece = board[x][y];
             if (piece == EMPTY_PIECE) { empty_count++; } else {
-                if (empty_count > 0) { fen << empty_count; empty_count = 0; }
-                fen << pieceChar[piece];
+                if (empty_count > 0) { key << empty_count; empty_count = 0; }
+                key << pieceChar[piece];
             }
         }
-        if (empty_count > 0) { fen << empty_count; }
-        if (y > 1) { fen << '/'; }
+        if (empty_count > 0) { key << empty_count; }
+        if (y > 1) { key << '/'; }
     }
-    fen << (currentPlayer == WHITE ? " w " : " b ");
+    key << (currentPlayer == WHITE ? " w " : " b ");
     string castle_str;
     if (castlingRights & WK_CASTLE) castle_str += 'K';
     if (castlingRights & WQ_CASTLE) castle_str += 'Q';
     if (castlingRights & BK_CASTLE) castle_str += 'k';
     if (castlingRights & BQ_CASTLE) castle_str += 'q';
-    fen << (castle_str.empty() ? "-" : castle_str) << " ";
-    if (enPassantTarget.ok()) { fen << (char)('a' + enPassantTarget.x - 1) << (char)('0' + enPassantTarget.y); } else { fen << "-"; }
-    fen << " " << halfmoveClock << " " << Round;
+    key << (castle_str.empty() ? "-" : castle_str) << " ";
+    if (enPassantTarget.ok()) { key << (char)('a' + enPassantTarget.x - 1) << (char)('0' + enPassantTarget.y); } else { key << "-"; }
+    return key.str();
+}
+
+string GenerateFEN() {
+    string key = GeneratePositionKey();
+    stringstream fen;
+    fen << key << " " << halfmoveClock << " " << Round;
     return fen.str();
 }
 void LoadOpeningBook() {
@@ -140,13 +158,17 @@ void LoadOpeningBook() {
 }
 
 
-// --- ∏®÷˙∫Ø ˝ (Œﬁ±‰ªØ) ---
+// --- ËæÖÂä©ÂáΩÊï∞ ---
 inline int PieceColorOf(int piece) {
     if (piece == EMPTY_PIECE) return NONE;
     return ( (piece & COLOR_MASK) ? BLACK : WHITE );
 }
 
-// --- ∫À–ƒπ¶ƒ‹∫Ø ˝ (Œﬁ±‰ªØ) ---
+void ResetPositionHistory() {
+    positionHistory.clear();
+    positionHistory[GeneratePositionKey()]++;
+}
+// --- Ê†∏ÂøÉÂäüËÉΩÂáΩÊï∞ ---
 void GenerateMoves(vector<Move>& moves, bool capturesOnly = false);
 void SetBoard() {
     memset(board, 0, sizeof(board));
@@ -156,7 +178,40 @@ void SetBoard() {
     for (int i=1; i<=8; i++) board[i][7]=B_PAWN;
     currentPlayer = WHITE; castlingRights = WK_CASTLE | WQ_CASTLE | BK_CASTLE | BQ_CASTLE; enPassantTarget = Pos(0,0); Round = 1;
     halfmoveClock = 0;
+    ResetPositionHistory();
 }
+void LoadFEN(const string& fen) {
+    memset(board, 0, sizeof(board));
+    stringstream ss(fen);
+    string piece_placement, active_color, castling, en_passant, halfmove, fullmove;
+    ss >> piece_placement >> active_color >> castling >> en_passant >> halfmove >> fullmove;
+
+    int x = 1, y = 8;
+    for (char c : piece_placement) {
+        if (c == '/') { y--; x = 1; }
+        else if (isdigit(c)) { x += (c - '0'); }
+        else { board[x++][y] = charToPiece[c]; }
+    }
+    currentPlayer = (active_color == "w") ? WHITE : BLACK;
+    castlingRights = 0;
+    for (char c : castling) {
+        if (c == 'K') castlingRights |= WK_CASTLE;
+        else if (c == 'Q') castlingRights |= WQ_CASTLE;
+        else if (c == 'k') castlingRights |= BK_CASTLE;
+        else if (c == 'q') castlingRights |= BQ_CASTLE;
+    }
+    if (en_passant == "-") { enPassantTarget = Pos(0, 0); }
+    else { enPassantTarget = Pos(en_passant[0] - 'a' + 1, en_passant[1] - '0'); }
+    try {
+        halfmoveClock = stoi(halfmove);
+        Round = stoi(fullmove);
+    } catch (const std::invalid_argument& ia) {
+        halfmoveClock = 0;
+        Round = 1;
+    }
+    ResetPositionHistory();
+}
+
 bool IsSquareAttacked(Pos p, int attackerCamp) {
     int pawnDir = (attackerCamp == WHITE) ? 1 : -1;
     Pos a1 = {p.x - 1, p.y - pawnDir};
@@ -330,9 +385,14 @@ UndoInfo MakeMove(const Move& move) {
     if (undo.capturedPiece == B_ROOK && move.to.x == 8 && move.to.y == 8) castlingRights &= ~BK_CASTLE;
     currentPlayer = 1 - currentPlayer;
     if (currentPlayer == WHITE) { Round++; }
+    
+    positionHistory[GeneratePositionKey()]++;
+    
     return undo;
 }
 void UnmakeMove(const Move& move, const UndoInfo& undo) {
+    positionHistory[GeneratePositionKey()]--;
+
     currentPlayer = 1 - currentPlayer;
     int movedPiece;
     if (move.promotion != EMPTY_PIECE) { movedPiece = PAWN | (currentPlayer * COLOR_MASK); } else { movedPiece = board[move.to.x][move.to.y]; }
@@ -354,7 +414,15 @@ void UnmakeMove(const Move& move, const UndoInfo& undo) {
     if (currentPlayer == BLACK) { Round--; }
 }
 
-// --- ∆¿π¿∫Ø ˝ (Œﬁ±‰ªØ) ---
+// --- ËØÑ‰º∞ÂáΩÊï∞ÈÉ®ÂàÜ ---
+const double DOUBLED_PAWN_PENALTY = -15.0;
+const double ISOLATED_PAWN_PENALTY = -10.0;
+const double PASSED_PAWN_BONUS[] = {0, 10, 20, 30, 50, 80, 120, 200}; 
+const double BISHOP_PAIR_BONUS = 40.0;
+const double ROOK_ON_SEMI_OPEN_FILE_BONUS = 15.0;
+const double ROOK_ON_OPEN_FILE_BONUS = 30.0;
+const double PAWN_SHIELD_PENALTY = -10.0; 
+
 double GetPSTValue(int piece, int x, int y) {
     int piece_type = piece & PIECE_TYPE_MASK;
     int color = PieceColorOf(piece);
@@ -376,6 +444,94 @@ double GetPSTValue(int piece, int x, int y) {
     double mg_score = mg_table[square_idx]; double eg_score = eg_table[square_idx];
     return (mg_score * phase) + (eg_score * (1.0 - phase));
 }
+
+double EvaluatePositional() {
+    double score = 0;
+    int white_pawns_on_file[9] = {0};
+    int black_pawns_on_file[9] = {0};
+    int white_bishops = 0, black_bishops = 0;
+    Pos white_king_pos, black_king_pos;
+    for (int x = 1; x <= 8; ++x) {
+        for (int y = 1; y <= 8; ++y) {
+            int piece = board[x][y];
+            if (piece == EMPTY_PIECE) continue;
+            int piece_type = piece & PIECE_TYPE_MASK;
+            int color = PieceColorOf(piece);
+            if (piece_type == PAWN) {
+                if (color == WHITE) white_pawns_on_file[x]++;
+                else black_pawns_on_file[x]++;
+            } else if (piece_type == BISHOP) {
+                if (color == WHITE) white_bishops++;
+                else black_bishops++;
+            } else if (piece_type == KING) {
+                if (color == WHITE) white_king_pos = {x, y};
+                else black_king_pos = {x, y};
+            }
+        }
+    }
+    for (int i = 1; i <= 8; ++i) {
+        if (white_pawns_on_file[i] > 1) score += (white_pawns_on_file[i] - 1) * DOUBLED_PAWN_PENALTY;
+        if (black_pawns_on_file[i] > 1) score -= (black_pawns_on_file[i] - 1) * DOUBLED_PAWN_PENALTY;
+    }
+    for (int x = 1; x <= 8; ++x) {
+        for (int y = 1; y <= 8; ++y) {
+            int piece = board[x][y];
+            if (piece == EMPTY_PIECE) continue;
+            int piece_type = piece & PIECE_TYPE_MASK;
+            int color = PieceColorOf(piece);
+            if (piece_type == PAWN) {
+                int left_file_idx = max(1, x - 1); int right_file_idx = min(8, x + 1);
+                bool isolated = false;
+                if (color == WHITE) { if (white_pawns_on_file[left_file_idx] == 0 && white_pawns_on_file[right_file_idx] == 0) isolated = true; } 
+                else { if (black_pawns_on_file[left_file_idx] == 0 && black_pawns_on_file[right_file_idx] == 0) isolated = true; }
+                if (isolated) { score += (color == WHITE) ? ISOLATED_PAWN_PENALTY : -ISOLATED_PAWN_PENALTY; }
+                bool is_passed = true;
+                int forward_dir = (color == WHITE) ? 1 : -1;
+                for (int dx = -1; dx <= 1; ++dx) {
+                    int check_x = x + dx; if (check_x < 1 || check_x > 8) continue;
+                    for (int check_y = y + forward_dir; check_y >= 1 && check_y <= 8; check_y += forward_dir) {
+                        int blocking_piece = board[check_x][check_y];
+                        if (blocking_piece != EMPTY_PIECE && PieceColorOf(blocking_piece) != color && (blocking_piece & PIECE_TYPE_MASK) == PAWN) {
+                            is_passed = false; break;
+                        }
+                    }
+                    if (!is_passed) break;
+                }
+                if (is_passed) { int rank_from_home = (color == WHITE) ? y : (9 - y); double bonus = PASSED_PAWN_BONUS[rank_from_home-1]; score += (color == WHITE) ? bonus : -bonus; }
+            } else if (piece_type == ROOK) {
+                if (color == WHITE) {
+                    if (white_pawns_on_file[x] == 0) { if (black_pawns_on_file[x] == 0) score += ROOK_ON_OPEN_FILE_BONUS; else score += ROOK_ON_SEMI_OPEN_FILE_BONUS; }
+                } else { if (black_pawns_on_file[x] == 0) { if (white_pawns_on_file[x] == 0) score -= ROOK_ON_OPEN_FILE_BONUS; else score -= ROOK_ON_SEMI_OPEN_FILE_BONUS; } }
+            }
+        }
+    }
+    if (white_bishops >= 2) score += BISHOP_PAIR_BONUS;
+    if (black_bishops >= 2) score -= BISHOP_PAIR_BONUS;
+    if (white_king_pos.y <= 2) {
+        if (white_king_pos.x >= 6) { 
+            if (board[6][2] != W_PAWN) score += PAWN_SHIELD_PENALTY * 2; else if (board[6][3] == W_PAWN) score += PAWN_SHIELD_PENALTY;
+            if (board[7][2] != W_PAWN) score += PAWN_SHIELD_PENALTY * 2; else if (board[7][3] == W_PAWN) score += PAWN_SHIELD_PENALTY;
+            if (board[8][2] != W_PAWN) score += PAWN_SHIELD_PENALTY * 2; else if (board[8][3] == W_PAWN) score += PAWN_SHIELD_PENALTY;
+        } else if (white_king_pos.x <= 4) {
+            if (board[1][2] != W_PAWN) score += PAWN_SHIELD_PENALTY * 2; else if (board[1][3] == W_PAWN) score += PAWN_SHIELD_PENALTY;
+            if (board[2][2] != W_PAWN) score += PAWN_SHIELD_PENALTY * 2; else if (board[2][3] == W_PAWN) score += PAWN_SHIELD_PENALTY;
+            if (board[3][2] != W_PAWN) score += PAWN_SHIELD_PENALTY * 2; else if (board[3][3] == W_PAWN) score += PAWN_SHIELD_PENALTY;
+        }
+    }
+    if (black_king_pos.y >= 7) {
+        if (black_king_pos.x >= 6) {
+            if (board[6][7] != B_PAWN) score -= PAWN_SHIELD_PENALTY * 2; else if (board[6][6] == B_PAWN) score -= PAWN_SHIELD_PENALTY;
+            if (board[7][7] != B_PAWN) score -= PAWN_SHIELD_PENALTY * 2; else if (board[7][6] == B_PAWN) score -= PAWN_SHIELD_PENALTY;
+            if (board[8][7] != B_PAWN) score -= PAWN_SHIELD_PENALTY * 2; else if (board[8][6] == B_PAWN) score -= PAWN_SHIELD_PENALTY;
+        } else if (black_king_pos.x <= 4) {
+            if (board[1][7] != B_PAWN) score -= PAWN_SHIELD_PENALTY * 2; else if (board[1][6] == B_PAWN) score -= PAWN_SHIELD_PENALTY;
+            if (board[2][7] != B_PAWN) score -= PAWN_SHIELD_PENALTY * 2; else if (board[2][6] == B_PAWN) score -= PAWN_SHIELD_PENALTY;
+            if (board[3][7] != B_PAWN) score -= PAWN_SHIELD_PENALTY * 2; else if (board[3][6] == B_PAWN) score -= PAWN_SHIELD_PENALTY;
+        }
+    }
+    return score;
+}
+
 double Evaluate() {
     double score = 0;
     for (int x = 1; x <= 8; x++) {
@@ -388,15 +544,20 @@ double Evaluate() {
             score += (pieceColor == WHITE) ? current_score : -current_score;
         }
     }
+    score += EvaluatePositional();
     return score;
 }
 
-// --- AI À—À˜ (Œﬁ±‰ªØ) ---
+// --- AI ÊêúÁ¥¢ ---
 Move searchBestMove;
 long long computedNodes;
 chrono::time_point<chrono::high_resolution_clock> searchStartTime;
 int searchTimeLimitMs;
 double QuiescenceSearch(double alpha, double beta);
+bool time_is_up = false;
+int search_min_depth;
+int iterative_deepening_current_depth;
+
 int scoreMove(const Move& move) {
     int score = 0;
     int capturedPieceType = board[move.to.x][move.to.y] & PIECE_TYPE_MASK;
@@ -407,30 +568,31 @@ int scoreMove(const Move& move) {
     if (move.promotion != EMPTY_PIECE) { score += pieceValue[move.promotion & PIECE_TYPE_MASK]; }
     return score;
 }
-double AlphaBetaSearch(int depth, double alpha, double beta) {
-    auto now = chrono::high_resolution_clock::now();
-    if (chrono::duration_cast<chrono::milliseconds>(now - searchStartTime).count() > searchTimeLimitMs) { return 0; }
-    if (depth == 0) { return QuiescenceSearch(alpha, beta); }
 
-    vector<Move> moves;
-    GenerateMoves(moves, false);
+double AlphaBetaSearch(int depth, double alpha, double beta) {
+    if (time_is_up) { return 0; }
+    if (iterative_deepening_current_depth > search_min_depth) {
+        auto now = chrono::high_resolution_clock::now();
+        if (chrono::duration_cast<chrono::milliseconds>(now - searchStartTime).count() > searchTimeLimitMs) {
+            time_is_up = true;
+            return 0;
+        }
+    }
+    if (positionHistory[GeneratePositionKey()] >= 2) { return 0.0; }
+    if (depth == 0) { return QuiescenceSearch(alpha, beta); }
+    vector<Move> moves; GenerateMoves(moves, false);
     vector<Move> legal_moves;
     Pos kingPos;
-    for(int x=1; x<=8; ++x) for(int y=1; y<=8; ++y) {
-        if(board[x][y] == (KING | (currentPlayer * COLOR_MASK))) { kingPos = {x,y}; break; }
-    }
+    for(int x=1; x<=8; ++x) for(int y=1; y<=8; ++y) { if(board[x][y] == (KING | (currentPlayer * COLOR_MASK))) { kingPos = {x,y}; break; } }
     for (const auto& m : moves) {
         Pos kingPos_after = kingPos;
         if ((board[m.from.x][m.from.y] & PIECE_TYPE_MASK) == KING) kingPos_after = m.to;
         UndoInfo undo = MakeMove(m);
-        if (!IsSquareAttacked(kingPos_after, currentPlayer)) { 
-            legal_moves.push_back(m);
-        }
+        if (!IsSquareAttacked(kingPos_after, currentPlayer)) { legal_moves.push_back(m); }
         UnmakeMove(m, undo);
     }
-
     if (legal_moves.empty()) {
-        if (IsSquareAttacked(kingPos, 1 - currentPlayer)) { return -1e9 - depth; } 
+        if (IsSquareAttacked(kingPos, 1 - currentPlayer)) { return -1e9 - depth; }
         else { return 0; }
     }
     sort(legal_moves.begin(), legal_moves.end(), [&](const Move& a, const Move& b) { return scoreMove(a) > scoreMove(b); });
@@ -440,7 +602,7 @@ double AlphaBetaSearch(int depth, double alpha, double beta) {
         computedNodes++;
         double score = -AlphaBetaSearch(depth - 1, -beta, -alpha);
         UnmakeMove(m, undo);
-        if (chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now() - searchStartTime).count() > searchTimeLimitMs) { return 0; }
+        if (time_is_up) { return 0; }
         if (score > bestScore) { bestScore = score; }
         if (bestScore > alpha) { alpha = bestScore; }
         if (alpha >= beta) { break; }
@@ -448,27 +610,26 @@ double AlphaBetaSearch(int depth, double alpha, double beta) {
     return bestScore;
 }
 double QuiescenceSearch(double alpha, double beta) {
-    auto now = chrono::high_resolution_clock::now();
-    if (chrono::duration_cast<chrono::milliseconds>(now - searchStartTime).count() > searchTimeLimitMs) { return 0; }
-
+    if (time_is_up) { return 0; }
+    if (iterative_deepening_current_depth > search_min_depth) {
+        auto now = chrono::high_resolution_clock::now();
+        if (chrono::duration_cast<chrono::milliseconds>(now - searchStartTime).count() > searchTimeLimitMs) {
+            time_is_up = true;
+            return 0;
+        }
+    }
     double stand_pat = (currentPlayer == WHITE ? Evaluate() : -Evaluate());
     if (stand_pat >= beta) { return beta; }
     if (alpha < stand_pat) { alpha = stand_pat; }
-
-    vector<Move> capture_moves;
-    GenerateMoves(capture_moves, true);
+    vector<Move> capture_moves; GenerateMoves(capture_moves, true);
     vector<Move> legal_captures;
     Pos kingPos;
-    for(int x=1; x<=8; ++x) for(int y=1; y<=8; ++y) {
-        if(board[x][y] == (KING | (currentPlayer * COLOR_MASK))) { kingPos = {x,y}; break; }
-    }
+    for(int x=1; x<=8; ++x) for(int y=1; y<=8; ++y) { if(board[x][y] == (KING | (currentPlayer * COLOR_MASK))) { kingPos = {x,y}; break; } }
      for (const auto& m : capture_moves) {
         Pos kingPos_after = kingPos;
         if ((board[m.from.x][m.from.y] & PIECE_TYPE_MASK) == KING) kingPos_after = m.to;
         UndoInfo undo = MakeMove(m);
-        if (!IsSquareAttacked(kingPos_after, currentPlayer)) { 
-            legal_captures.push_back(m);
-        }
+        if (!IsSquareAttacked(kingPos_after, currentPlayer)) { legal_captures.push_back(m); }
         UnmakeMove(m, undo);
     }
     sort(legal_captures.begin(), legal_captures.end(), [&](const Move& a, const Move& b) { return scoreMove(a) > scoreMove(b); });
@@ -477,21 +638,20 @@ double QuiescenceSearch(double alpha, double beta) {
         computedNodes++;
         double score = -QuiescenceSearch(-beta, -alpha);
         UnmakeMove(m, undo);
-        if (chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now() - searchStartTime).count() > searchTimeLimitMs) { return 0; }
+        if (time_is_up) { return 0; }
         if (score >= beta) { return beta; }
         if (score > alpha) { alpha = score; }
     }
     return alpha;
 }
-
-// --- –ﬁ∏ƒ≤ø∑÷ ---
-void SearchBestMove() {
+void SearchBestMove(int min_depth) {
     searchStartTime = chrono::high_resolution_clock::now();
     computedNodes = 0;
+    time_is_up = false;
+    search_min_depth = min_depth;
     double bestScoreSoFar = -numeric_limits<double>::infinity();
     const int MAX_DEPTH = 64;
-    vector<Move> moves;
-    GenerateMoves(moves, false);
+    vector<Move> moves; GenerateMoves(moves, false);
     vector<Move> legal_moves;
     Pos kingPos;
     for(int x=1; x<=8; ++x) for(int y=1; y<=8; ++y) if(board[x][y] == (KING | (currentPlayer * COLOR_MASK))) { kingPos = {x,y}; break; }
@@ -504,26 +664,27 @@ void SearchBestMove() {
     }
     if (legal_moves.empty()) return;
     searchBestMove = legal_moves[0];
-    
-    // --- –ﬁ∏ƒ£∫Ω´µ¸¥˙º”…Ó—≠ª∑∏ƒŒ™÷ªÀ—À˜≈º ˝≤„…Ó∂» ---
-    // ‘≠¥˙¬Î: for (int current_depth = 1; current_depth <= MAX_DEPTH; ++current_depth)
     for (int current_depth = 2; current_depth <= MAX_DEPTH; current_depth += 2) {
-        double alpha = -numeric_limits<double>::infinity();
-        double beta = numeric_limits<double>::infinity();
+        iterative_deepening_current_depth = current_depth;
         sort(legal_moves.begin(), legal_moves.end(), [&](const Move& a, const Move& b) { return scoreMove(a) > scoreMove(b); });
         Move bestMoveThisIteration = legal_moves[0];
         double bestScoreThisIteration = -numeric_limits<double>::infinity();
+        double alpha = -numeric_limits<double>::infinity();
+        double beta = numeric_limits<double>::infinity();
         for (const auto& m : legal_moves) {
             UndoInfo undo = MakeMove(m);
             double score = -AlphaBetaSearch(current_depth - 1, -beta, -alpha);
             UnmakeMove(m, undo);
-            auto now = chrono::high_resolution_clock::now();
-            if (chrono::duration_cast<chrono::milliseconds>(now - searchStartTime).count() > searchTimeLimitMs) { goto search_end; }
+            if (time_is_up) { break; }
             if (score > bestScoreThisIteration) {
                 bestScoreThisIteration = score;
                 bestMoveThisIteration = m;
                 if (score > alpha) { alpha = score; }
             }
+        }
+        if (time_is_up) {
+            cout << "info string Time up during depth " << current_depth << ". Using results from depth " << current_depth - 2 << "." << endl;
+            break; 
         }
         bestScoreSoFar = bestScoreThisIteration;
         searchBestMove = bestMoveThisIteration;
@@ -531,13 +692,16 @@ void SearchBestMove() {
         chrono::duration<double> diff = end_time - searchStartTime;
         cout << "info depth " << current_depth << " score cp " << static_cast<int>(currentPlayer == WHITE ? bestScoreSoFar : -bestScoreSoFar)
              << " nodes " << computedNodes << " time " << static_cast<int>(diff.count() * 1000) << "ms" << endl;
+        if (current_depth >= min_depth) {
+            auto now = chrono::high_resolution_clock::now();
+            if (chrono::duration_cast<chrono::milliseconds>(now - searchStartTime).count() > searchTimeLimitMs) {
+                cout << "info string Not enough time to start next depth." << endl;
+                break;
+            }
+        }
     }
-search_end:
-    return;
 }
-// --- –ﬁ∏ƒΩ· ¯ ---
-
-// --- ÷˜∫Ø ˝∫ÕUI (Œﬁ±‰ªØ) ---
+// --- UI ËæÖÂä©ÂáΩÊï∞ ---
 Move parse_uci_move(const string& uci_str) {
     Move move;
     move.from.x = uci_str[0] - 'a' + 1; move.from.y = uci_str[1] - '0';
@@ -552,7 +716,7 @@ Move parse_uci_move(const string& uci_str) {
 }
 void PrintBoard() {
     cout << "\n   a  b  c  d  e  f  g  h" << endl;
-    cout << "  -------------------------" << endl;
+    cout << "  +------------------------+" << endl;
     for (int j = 8; j >= 1; j--) {
         cout << j << " |";
         for (int i = 1; i <= 8; i++) {
@@ -565,44 +729,232 @@ void PrintBoard() {
         }
         cout << "| " << j << endl;
     }
-    cout << "  -------------------------" << endl;
-    cout << "   a  b  c  d  e  f  g  h\n" << endl;
+    cout << "  +------------------------+" << endl;
+    cout << "   a  b  c  d  e  f  g  h" << endl;
+    cout << "FEN: " << GenerateFEN() << endl << endl;
 }
+Move ParseAlgebraicMove(const string& san_str, const vector<Move>& legal_moves) {
+    string s = san_str;
+    if (s == "O-O" || s == "0-0") {
+        int rank = (currentPlayer == WHITE) ? 1 : 8;
+        for (const auto& m : legal_moves) {
+            if ((board[m.from.x][m.from.y] & PIECE_TYPE_MASK) == KING &&
+                m.from.x == 5 && m.from.y == rank && m.to.x == 7 && m.to.y == rank) {
+                return m;
+            }
+        }
+    }
+    if (s == "O-O-O" || s == "0-0-0") {
+        int rank = (currentPlayer == WHITE) ? 1 : 8;
+        for (const auto& m : legal_moves) {
+            if ((board[m.from.x][m.from.y] & PIECE_TYPE_MASK) == KING &&
+                m.from.x == 5 && m.from.y == rank && m.to.x == 3 && m.to.y == rank) {
+                return m;
+            }
+        }
+    }
+    
+    s.erase(remove(s.begin(), s.end(), '+'), s.end());
+    s.erase(remove(s.begin(), s.end(), '#'), s.end());
+    s.erase(remove(s.begin(), s.end(), 'x'), s.end());
+    
+    int promotion_piece = EMPTY_PIECE;
+    size_t promotion_pos = s.find('=');
+    if (promotion_pos != string::npos) {
+        char prom_char = toupper(s[promotion_pos + 1]);
+        if (prom_char == 'Q') promotion_piece = QUEEN;
+        else if (prom_char == 'R') promotion_piece = ROOK;
+        else if (prom_char == 'B') promotion_piece = BISHOP;
+        else if (prom_char == 'N') promotion_piece = KNIGHT;
+        promotion_piece |= (currentPlayer * COLOR_MASK);
+        s = s.substr(0, promotion_pos);
+    }
+    
+    Pos to_pos;
+    to_pos.y = s.back() - '0';
+    s.pop_back();
+    to_pos.x = s.back() - 'a' + 1;
+    s.pop_back();
+
+    int piece_type = PAWN;
+    if (!s.empty() && isupper(s[0])) {
+        if (s[0] == 'N') piece_type = KNIGHT;
+        else if (s[0] == 'B') piece_type = BISHOP;
+        else if (s[0] == 'R') piece_type = ROOK;
+        else if (s[0] == 'Q') piece_type = QUEEN;
+        else if (s[0] == 'K') piece_type = KING;
+        s = s.substr(1);
+    }
+    
+    int from_file = -1, from_rank = -1;
+    if (!s.empty()) {
+        if (s.length() == 1) {
+            if (s[0] >= 'a' && s[0] <= 'h') from_file = s[0] - 'a' + 1;
+            else if (s[0] >= '1' && s[0] <= '8') from_rank = s[0] - '0';
+        } else if (s.length() == 2) {
+            from_file = s[0] - 'a' + 1;
+            from_rank = s[1] - '0';
+        }
+    }
+    
+    vector<Move> candidates;
+    for (const auto& m : legal_moves) {
+        if (m.to == to_pos && (board[m.from.x][m.from.y] & PIECE_TYPE_MASK) == piece_type) {
+            bool file_match = (from_file == -1 || m.from.x == from_file);
+            bool rank_match = (from_rank == -1 || m.from.y == from_rank);
+            bool promotion_match = (promotion_piece == EMPTY_PIECE) ? (m.promotion == EMPTY_PIECE) : (m.promotion == promotion_piece);
+
+            if (file_match && rank_match && promotion_match) {
+                candidates.push_back(m);
+            }
+        }
+    }
+    
+    if (candidates.size() == 1) {
+        return candidates[0];
+    }
+    
+    return Move{Pos(0,0), Pos(0,0)};
+}
+bool LoadPGN(const string& filename) {
+    ifstream file(filename);
+    if (!file.is_open()) {
+        cout << "Error: Could not open PGN file '" << filename << "'" << endl;
+        return false;
+    }
+
+    stringstream buffer;
+    buffer << file.rdbuf();
+    string content = buffer.str();
+    file.close();
+
+    string initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    smatch match;
+    // --- FIX START --- Replaced raw string literals with standard strings for compatibility ---
+    regex fen_regex("\\[FEN\\s+\"([^\"]+)\"\\]");
+    if (regex_search(content, match, fen_regex)) {
+        initial_fen = match[1].str();
+    }
+    LoadFEN(initial_fen);
+    
+    size_t movetext_start = content.rfind(']');
+    if (movetext_start == string::npos) movetext_start = 0;
+    else movetext_start++;
+    
+    string movetext = content.substr(movetext_start);
+    movetext = regex_replace(movetext, regex("\\{.*?\\}"), " "); // Remove comments
+    movetext = regex_replace(movetext, regex("\\d+\\."), " ");   // Remove move numbers
+    // --- FIX END ---
+    
+    stringstream move_stream(movetext);
+    string san_move;
+    while (move_stream >> san_move) {
+        if (san_move == "1-0" || san_move == "0-1" || san_move == "1/2-1/2" || san_move == "*") break;
+
+        vector<Move> legal_moves;
+        vector<Move> all_moves; GenerateMoves(all_moves, false);
+        Pos kingPos;
+        for(int x=1; x<=8; ++x) for(int y=1; y<=8; ++y) if(board[x][y] == (KING | (currentPlayer * COLOR_MASK))) { kingPos = {x,y}; break; }
+        for (const auto& m : all_moves) {
+            Pos king_after = kingPos; if((board[m.from.x][m.from.y] & PIECE_TYPE_MASK) == KING) king_after = m.to;
+            UndoInfo undo = MakeMove(m);
+            if (!IsSquareAttacked(king_after, currentPlayer)) legal_moves.push_back(m);
+            UnmakeMove(m, undo);
+        }
+        
+        Move parsed_move = ParseAlgebraicMove(san_move, legal_moves);
+        if (parsed_move.from.ok()) {
+            MakeMove(parsed_move);
+        } else {
+            cout << "Error parsing move '" << san_move << "' in PGN file. Stopping." << endl;
+            PrintBoard();
+            return false;
+        }
+    }
+    cout << "PGN file loaded successfully." << endl;
+    return true;
+}
+
+// --- ‰∏ªÂáΩÊï∞ÂíåUI ---
 int main() {
     #ifdef _WIN32
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hOut != INVALID_HANDLE_VALUE) { DWORD dwMode = 0; if (GetConsoleMode(hOut, &dwMode)) { dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING; SetConsoleMode(hOut, dwMode); }}
     #endif
-    cout << "-------------------- StarFish Ver 2.5 (Bookworm) [Final Corrected] --------------------" << endl;
-    cout << "Engine with FEN Opening Book, Iterative Deepening, and Quiescence Search." << endl;
-    cout << "Oct, 2025 Build. Developed by dsyoier, upgraded by AI." << endl;
+    cout << "------------------- StarFish Ver 2.8.1 (Strategist Pro) ------------------" << endl;
+    cout << "Engine with PGN/FEN/SAN support, FEN Book, Iterative Deepening, and Draw Detection." << endl;
+    cout << "Nov, 2025 Build. Developed by dsyoier, upgraded by AI." << endl;
     LoadOpeningBook();
-    SetBoard();
-    const int THINKING_TIME_MS = 8000;
+
+    cout << "\nSelect Game Mode:" << endl;
+    cout << "1. Start a new game" << endl;
+    cout << "2. Load position from FEN string" << endl;
+    cout << "3. Load game from PGN file" << endl;
+    cout << "Enter your choice (1-3): ";
+    
+    int mode_choice;
+    cin >> mode_choice;
+    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+
+    switch (mode_choice) {
+        case 2: {
+            cout << "Enter FEN string: ";
+            string fen;
+            getline(cin, fen);
+            LoadFEN(fen);
+            break;
+        }
+        case 3: {
+            cout << "Enter PGN file name (e.g., game.pgn): ";
+            string filename;
+            getline(cin, filename);
+            if (!LoadPGN(filename)) return 1;
+            break;
+        }
+        default:
+            SetBoard();
+            break;
+    }
+
+
+    int enginePlayerColor = -1;
+    cout << "\nWhich color should the engine play as? (w for white, b for black): ";
+    char choice;
+    while (cin >> choice) {
+        choice = tolower(choice);
+        if (choice == 'w') { enginePlayerColor = WHITE; break; } 
+        else if (choice == 'b') { enginePlayerColor = BLACK; break; } 
+        else { cout << "Invalid input. Please enter 'w' or 'b': "; }
+    }
+    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+
+    const int MIN_SEARCH_DEPTH = 6;
+    const int MAX_SEARCH_TIME_MS = 8000;
+
     while (true) {
         PrintBoard();
+        
+        if (positionHistory[GeneratePositionKey()] >= 3) { cout << "Draw by three-fold repetition!" << endl; break; }
+        if (halfmoveClock >= 100) { cout << "Draw by 50-move rule!" << endl; break; }
+
         vector<Move> all_moves; GenerateMoves(all_moves, false);
         vector<Move> legal_moves;
         Pos kingPos_before_move;
-        for(int x=1; x<=8; ++x) for(int y=1; y<=8; ++y) {
-            if(board[x][y] == (KING | (currentPlayer * COLOR_MASK))) { kingPos_before_move = {x,y}; break; }
-        }
+        for(int x=1; x<=8; ++x) for(int y=1; y<=8; ++y) if(board[x][y] == (KING | (currentPlayer * COLOR_MASK))) { kingPos_before_move = {x,y}; break; }
         for (const auto& m : all_moves) {
             Pos kingPos_after_move = kingPos_before_move;
             if ((board[m.from.x][m.from.y] & PIECE_TYPE_MASK) == KING) kingPos_after_move = m.to;
             UndoInfo undo = MakeMove(m);
-            if (!IsSquareAttacked(kingPos_after_move, currentPlayer)) {
-                legal_moves.push_back(m);
-            }
+            if (!IsSquareAttacked(kingPos_after_move, currentPlayer)) { legal_moves.push_back(m); }
             UnmakeMove(m, undo);
         }
         if (legal_moves.empty()) {
-            if (IsSquareAttacked(kingPos_before_move, 1 - currentPlayer)) {
-                cout << "Checkmate! " << ((currentPlayer == WHITE) ? "Black" : "White") << " Player Won." << endl;
+            if (IsSquareAttacked(kingPos_before_move, 1 - currentPlayer)) { cout << "Checkmate! " << ((currentPlayer == WHITE) ? "Black" : "White") << " Player Won." << endl;
             } else { cout << "Stalemate! It's a draw." << endl; }
             break;
         }
-        if (currentPlayer == WHITE) {
+
+        if (currentPlayer == enginePlayerColor) {
             bool book_move_found = false;
             string current_fen = GenerateFEN();
             if (openingBook.count(current_fen)) {
@@ -615,14 +967,16 @@ int main() {
                     cout << "StarFish plays from its opening book (FEN: " << current_fen << ")" << endl;
                     cout << "Move: " << uci_move_str << endl;
                     cout << "----------------------------------" << endl;
-                    MakeMove(book_move);
-                    book_move_found = true;
+                    MakeMove(book_move); book_move_found = true;
                 }
             }
             if (!book_move_found) {
-                cout << "StarFish (White) is thinking for up to " << THINKING_TIME_MS / 1000.0 << " seconds..." << endl;
-                searchTimeLimitMs = THINKING_TIME_MS;
-                SearchBestMove();
+                string engineColorStr = (enginePlayerColor == WHITE ? "White" : "Black");
+                cout << "StarFish (" << engineColorStr << ") is thinking (min depth " << MIN_SEARCH_DEPTH
+                     << ", max time " << MAX_SEARCH_TIME_MS / 1000.0 << "s)..." << endl;
+                searchTimeLimitMs = MAX_SEARCH_TIME_MS;
+                SearchBestMove(MIN_SEARCH_DEPTH);
+                
                 auto end_time = chrono::high_resolution_clock::now();
                 chrono::duration<double> diff = end_time - searchStartTime;
                 cout << "----------------------------------" << endl;
@@ -634,22 +988,19 @@ int main() {
                 MakeMove(searchBestMove);
             }
         } else {
-             cout << "Your turn (Black)." << endl;
-             cout << "Enter your move (e.g., e7 e5): ";
-             string from_str, to_str;
-             while (cin >> from_str >> to_str) {
-                if (from_str.length() != 2 || to_str.length() != 2) { cout << "Invalid format. Try again: "; continue; }
-                int from_x = tolower(from_str[0])-'a'+1, from_y = from_str[1]-'0', to_x = tolower(to_str[0])-'a'+1, to_y = to_str[1]-'0';
-                bool move_found = false;
-                for(const auto& m : legal_moves) {
-                    if(m.from.x == from_x && m.from.y == from_y && m.to.x == to_x && m.to.y == to_y) {
-                         if ((board[m.from.x][m.from.y] & PIECE_TYPE_MASK) == PAWN && (m.to.y == 1 || m.to.y == 8)) {
-                             Move promotion_move = m; promotion_move.promotion = (currentPlayer == BLACK ? B_QUEEN : W_QUEEN); MakeMove(promotion_move);
-                         } else { MakeMove(m); }
-                         move_found = true; break;
-                    }
+             string playerColorStr = (currentPlayer == WHITE ? "White" : "Black");
+             cout << "Your turn (" << playerColorStr << ")." << endl;
+             cout << "Enter your move in algebraic notation (e.g., e4, Nf3, O-O): ";
+             string san_input;
+             while (getline(cin, san_input)) {
+                if (san_input.empty()) continue;
+                Move human_move = ParseAlgebraicMove(san_input, legal_moves);
+                if (human_move.from.ok()) {
+                    MakeMove(human_move);
+                    break;
+                } else {
+                    cout << "Invalid or illegal move '" << san_input << "'. Try again: ";
                 }
-                if(move_found) { break; } else { cout << "Invalid or illegal move. Try again: "; }
             }
             if (cin.eof()) break;
         }
